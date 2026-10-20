@@ -329,8 +329,12 @@ main() {
   read_current
 
   local tmpdir rc
+  umask 077
   tmpdir="$(/usr/bin/mktemp -d /private/var/tmp/hosts-editor.XXXXXX)" || return 1
-  /bin/chmod 700 "$tmpdir"
+  # swiftDialog 3 relaunches itself as the console user when run as root, so that
+  # user must be able to read dialog.json. 711 lets them open it by name without
+  # listing the folder or changing anything in it; the other files stay root-only.
+  /bin/chmod 711 "$tmpdir"
   trap "/bin/rm -rf '$tmpdir'" EXIT
 
   local intro="Switch the predefined blocks on or off, and add or edit your own entries below.
@@ -346,12 +350,16 @@ One entry per line: \`IP-address hostname [more hostnames]\`, for example \`10.1
     done
     build_dialog_json "$tmpdir/dialog.json" "$message" "$TEXT_TITLE" "$CUSTOM_TEXT" "${block_args[@]}" \
       || { log "Could not build the dialog"; return 1; }
+    /bin/chmod 644 "$tmpdir/dialog.json"
 
-    "$DIALOG_BIN" --jsonfile "$tmpdir/dialog.json" --json > "$tmpdir/result.json" 2>/dev/null
+    "$DIALOG_BIN" --jsonfile "$tmpdir/dialog.json" --json \
+      > "$tmpdir/result.json" 2> "$tmpdir/dialog.err"
     rc=$?
     case $rc in
       0) ;;
       2) log "${user} cancelled; ${HOSTS_FILE} unchanged"; return 0 ;;
+      # 200 and up are swiftDialog's own errors, such as a file it cannot read.
+      <200->) log "swiftDialog failed (exit ${rc}): $(<"$tmpdir/dialog.err")"; return 1 ;;
       *) log "Dialog closed (exit ${rc}); ${HOSTS_FILE} unchanged"; return 0 ;;
     esac
 
