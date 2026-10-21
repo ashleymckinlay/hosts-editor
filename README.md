@@ -32,12 +32,19 @@ Lines that other tools added outside these parts are shown to the user as their 
 - The script checks the block definitions before it shows the dialog. If a block is invalid, it logs the error and exits, so a mistake by IT never reaches users.
 
 ## Audit and recovery
-- Every change is logged with the console user's name to the unified log (`log show --predicate 'senderImagePath CONTAINS "logger"' | grep hosts-editor`) and to `/var/log/hosts-editor.log`, which also records a diff of each change.
-- The previous 10 versions are kept in `/Library/Management/HostsEditor/backups/`, readable by root only.
-- After each write, the script flushes the DNS cache.
+The log and backups are kept in the logged-in user's home folder, so they can open them without admin rights:
+
+- **Log:** `~/Library/Logs/HostsEditor/hosts-editor.log`. It records each change with a diff. Users can also open it in Console.app, under **Log Reports**.
+- **Backups:** the previous 10 versions of the file are kept in `~/Library/Application Support/HostsEditor/Backups/`. To restore one, copy the lines you need back into the editor.
+
+Root never writes into the user's home folder itself. Every write there runs as the user, so a symlink planted in that folder can't redirect root's writes to a system file.
+
+Users can edit or delete their own log, so it isn't an audit record. For that, each change is also written with the user's name to the unified log, which users can't edit: `log show --predicate 'senderImagePath CONTAINS "logger"' | grep hosts-editor`.
+
+After each write, the script flushes the DNS cache.
 
 ## Limits
 This tool only controls what the Self Service flow writes. A user with admin rights, or another root process, can still edit `/etc/hosts` directly.
 
 ## Testing
-Sourcing the script loads its functions without running anything. To run the whole flow on a copy of the file, point `HOSTS_FILE`, `STATE_DIR` and `LOG_FILE` somewhere else, and set `DIALOG_BIN` to a stub that prints swiftDialog-style JSON.
+Sourcing the script loads its functions without running anything. To run the whole flow on a copy of the file, point `HOSTS_FILE`, `BACKUP_DIR` and `LOG_FILE` somewhere else, and set `DIALOG_BIN` to a stub that prints swiftDialog-style JSON.

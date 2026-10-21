@@ -14,14 +14,16 @@
 #   $5  maximum number of custom entries (default 100)
 #
 # Requires swiftDialog 2.4+ (https://github.com/swiftDialog/swiftDialog).
-# Environment overrides exist for testing only: HOSTS_FILE, STATE_DIR, LOG_FILE, DIALOG_BIN.
+# Environment overrides exist for testing only: HOSTS_FILE, BACKUP_DIR, LOG_FILE, DIALOG_BIN.
 
 set -uo pipefail
 setopt extended_glob
 
 HOSTS_FILE="${HOSTS_FILE:-/private/etc/hosts}"
-STATE_DIR="${STATE_DIR:-/Library/Management/HostsEditor}"
-LOG_FILE="${LOG_FILE:-/var/log/hosts-editor.log}"
+# The log and backups default to the console user's ~/Library; see main.
+LOG_FILE="${LOG_FILE:-}"
+BACKUP_DIR="${BACKUP_DIR:-}"
+CONSOLE_USER=""
 DIALOG_BIN="${DIALOG_BIN:-/usr/local/bin/dialog}"
 BACKUPS_KEPT=10
 MAX_CUSTOM="${5:-100}"
@@ -75,9 +77,23 @@ EXAMPLE_LINES=(
   '## fe80::1%en0   printer.test                      # IPv6 works too'
 )
 
+# The log and backups live in the console user's home so they can read them
+# without admin rights. Root never writes there itself: the user controls that
+# folder, and a planted symlink could aim root's writes at any file. Writing as
+# the user limits every write to files they could change anyway.
+as_user() {
+  if [[ $EUID -eq 0 ]]; then /usr/bin/sudo -n -u "$CONSOLE_USER" -- "$@"; else "$@"; fi
+}
+
+# Appends stdin to $1 as the console user, creating its folder if needed.
+user_append() {
+  as_user /bin/sh -c 'umask 022; /bin/mkdir -p "${1%/*}" && /bin/cat >> "$1"' sh "$1" 2>/dev/null
+}
+
+# The unified log copy is the record users cannot edit; the file copy is for them.
 log() {
   /usr/bin/logger -t hosts-editor "$*"
-  print -r -- "$(/bin/date '+%F %T') $*" >> "$LOG_FILE" 2>/dev/null
+  [[ -n $LOG_FILE ]] && print -r -- "$(/bin/date '+%F %T') $*" | user_append "$LOG_FILE"
   print -r -- "$*" >&2
 }
 
@@ -302,12 +318,13 @@ write_hosts() {
 
   if [[ -f $HOSTS_FILE ]]; then
     stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
-    /bin/mkdir -p "$STATE_DIR/backups"
-    /bin/chmod 700 "$STATE_DIR/backups"
-    /bin/cp -p "$HOSTS_FILE" "$STATE_DIR/backups/hosts.$stamp"
-    local -a old=("$STATE_DIR"/backups/hosts.*(N.On))
-    (( $#old > BACKUPS_KEPT )) && /bin/rm -f -- "${(@)old[BACKUPS_KEPT+1,-1]}"
-    /usr/bin/diff -u "$HOSTS_FILE" "$new" >> "$LOG_FILE" 2>/dev/null
+    # Names sort by date, so everything after the newest BACKUPS_KEPT is pruned.
+    as_user /bin/sh -c 'umask 077; /bin/mkdir -p "$1" && /bin/cat > "$1/hosts.$2" || exit 1
+      cd "$1" && /bin/ls -1 | /usr/bin/grep "^hosts\.[0-9-]*$" | /usr/bin/sort -r \
+        | /usr/bin/tail -n "+$(( $3 + 1 ))" | while read -r f; do /bin/rm -f -- "$f"; done' \
+      sh "$BACKUP_DIR" "$stamp" "$BACKUPS_KEPT" < "$HOSTS_FILE" \
+      || log "Could not back up ${HOSTS_FILE} to ${BACKUP_DIR}; continuing"
+    /usr/bin/diff -u "$HOSTS_FILE" "$new" | user_append "$LOG_FILE"
   fi
 
   /bin/mv -f "$new" "$HOSTS_FILE" || { /bin/rm -f "$new"; return 1; }
@@ -322,11 +339,17 @@ main() {
   fi
   [[ -x $DIALOG_BIN ]] || { log "swiftDialog not found at ${DIALOG_BIN}"; return 1; }
 
-  local user
+  local user home
   user="$(/usr/bin/stat -f %Su /dev/console)"
   if [[ -z $user || $user == root || $user == loginwindow ]]; then
     log "No user logged in; nothing to show"; return 1
   fi
+  CONSOLE_USER=$user
+  home="$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null)"
+  home=${home#NFSHomeDirectory: }
+  [[ -d $home ]] || { log "Cannot find the home folder of ${user}"; return 1; }
+  : ${LOG_FILE:=$home/Library/Logs/HostsEditor/hosts-editor.log}
+  : ${BACKUP_DIR:=$home/Library/Application Support/HostsEditor/Backups}
 
   # Admin mistakes in the blocks must never reach /etc/hosts.
   local id
