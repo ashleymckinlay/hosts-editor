@@ -66,6 +66,15 @@ CUSTOM_BEGIN="# >>> custom entries (edit through Self Service)"
 CUSTOM_END="# <<< custom entries"
 TEXT_TITLE="Your entries"
 
+# Shown at the top of the editor as a template. Lines that still match exactly
+# are dropped on save; they are comments, so they never fail validation.
+EXAMPLE_LINES=(
+  '## Examples - these lines are not saved. Copy one and remove the ## to use it.'
+  '## 10.1.2.3      myapp.test'
+  '## 10.1.2.4      api.myapp.test admin.myapp.test   # one address, several names'
+  '## fe80::1%en0   printer.test                      # IPv6 works too'
+)
+
 log() {
   /usr/bin/logger -t hosts-editor "$*"
   print -r -- "$(/bin/date '+%F %T') $*" >> "$LOG_FILE" 2>/dev/null
@@ -163,6 +172,12 @@ normalize_text() {
   print -r -- "${(F)lines}"
 }
 
+without_examples() {
+  local -a lines=("${(@f)1}")
+  lines=("${(@)lines:|EXAMPLE_LINES}")
+  normalize_text "${(F)lines}"
+}
+
 # Sets ENABLED and CUSTOM_TEXT from the current hosts file.
 read_current() {
   local line in_block="" norm
@@ -214,7 +229,8 @@ render_hosts() {
   fi
 }
 
-# Writes the swiftDialog JSON config. Blocks are passed as "id<TAB>label<TAB>0|1".
+# Writes the swiftDialog JSON config. Blocks are passed as
+# "id<TAB>label<TAB>0|1<TAB>lines", with no tabs inside the lines.
 build_dialog_json() {
   /usr/bin/osascript -l JavaScript - "$@" <<'JXA'
 ObjC.import('Foundation');
@@ -231,11 +247,14 @@ function run(argv) {
     textfield: [{ title: textTitle, editor: true, value: text }],
   };
   if (blocks.length) {
-    cfg.checkbox = blocks.map((b) => {
-      const [, label, on] = b.split('\t');
-      return { label, checked: on === '1' };
-    });
+    const parsed = blocks.map((b) => b.split('\t'));
+    cfg.checkbox = parsed.map(([, label, on]) => ({ label, checked: on === '1' }));
     cfg.checkboxstyle = { style: 'switch', size: 'small' };
+    // The ? button opens this over the dialog, so edits in progress are kept.
+    cfg.helpmessage = parsed
+      .map(([, label, , lines]) => `**${label}**\n\n` + lines.split('\n')
+        .map((l) => '- `' + l.replace(/`/g, '') + '`').join('\n'))
+      .join('\n\n');
   }
   const json = $.NSString.alloc.initWithUTF8String(JSON.stringify(cfg));
   if (!json.writeToFileAtomicallyEncodingError(out, true, $.NSUTF8StringEncoding, null))
@@ -339,16 +358,19 @@ main() {
 
   local intro="Switch the predefined blocks on or off, and add or edit your own entries below.
 
-One entry per line: \`IP-address hostname [more hostnames]\`, for example \`10.1.2.3 myapp.test\`. Lines starting with \`#\` are comments. The macOS default entries are kept automatically."
+One entry per line: \`IP-address hostname [more hostnames]\`. Lines starting with \`#\` are comments. The examples at the top of the editor are not saved. The macOS default entries are kept automatically."
+  (( $#BLOCK_IDS )) && intro+=$'\n\n'"Press the **?** button to see what each block adds."
   local message=$intro
+  local editor_text="${(F)EXAMPLE_LINES}"
+  [[ -n $CUSTOM_TEXT ]] && editor_text+=$'\n\n'"$CUSTOM_TEXT"
   local -a block_args parse_args
   while true; do
     block_args=() parse_args=()
     for id in $BLOCK_IDS; do
-      block_args+=("$id"$'\t'"${BLOCK_LABEL[$id]}"$'\t'"$(( ${ENABLED[(Ie)$id]} ? 1 : 0 ))")
+      block_args+=("$id"$'\t'"${BLOCK_LABEL[$id]}"$'\t'"$(( ${ENABLED[(Ie)$id]} ? 1 : 0 ))"$'\t'"${BLOCK_LINES[$id]//$'\t'/ }")
       parse_args+=("$id"$'\t'"${BLOCK_LABEL[$id]}")
     done
-    build_dialog_json "$tmpdir/dialog.json" "$message" "$TEXT_TITLE" "$CUSTOM_TEXT" "${block_args[@]}" \
+    build_dialog_json "$tmpdir/dialog.json" "$message" "$TEXT_TITLE" "$editor_text" "${block_args[@]}" \
       || { log "Could not build the dialog"; return 1; }
     /bin/chmod 644 "$tmpdir/dialog.json"
 
@@ -365,10 +387,14 @@ One entry per line: \`IP-address hostname [more hostnames]\`, for example \`10.1
 
     ENABLED=(${(f)"$(parse_dialog_output "$tmpdir/result.json" "$tmpdir/text" "$TEXT_TITLE" "${parse_args[@]}")"}) \
       || { log "Could not read the dialog result"; return 1; }
-    CUSTOM_TEXT="$(normalize_text "$(<"$tmpdir/text")")"
+    # Validate the text as the user sees it, so line numbers in errors match the
+    # editor, and show it back unchanged if anything needs fixing.
+    editor_text="$(<"$tmpdir/text")"
+    editor_text=${editor_text//$'\r'/}
+    CUSTOM_TEXT="$(without_examples "$editor_text")"
 
     ERRORS=()
-    validate_entries "$CUSTOM_TEXT" "$TEXT_TITLE"
+    validate_entries "$editor_text" "$TEXT_TITLE"
     (( ENTRY_COUNT > MAX_CUSTOM )) && ERRORS+=("you have ${ENTRY_COUNT} entries; the limit is ${MAX_CUSTOM}")
     (( $#ERRORS )) || break
 

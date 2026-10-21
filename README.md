@@ -2,8 +2,8 @@
 
 A Jamf Self Service policy that lets standard users view and change `/etc/hosts` without admin rights. Jamf runs `hosts-editor.sh` as root, and the script shows a swiftDialog window with:
 
-- **Predefined blocks**, shown as on/off switches. IT defines these in the script, for example staging or QA environments.
-- **Your entries**, an editor that starts with the user's current entries.
+- **Predefined blocks**, shown as on/off switches. IT defines these in the script, for example staging or QA environments. The **?** button lists each block's entries. It opens over the dialog, so the user doesn't lose edits in progress.
+- **Your entries**, an editor that starts with the user's current entries. A few `##` example lines sit at the top as a template. They are never saved, and a user can copy one and remove the `##` to use it. Edit them in `EXAMPLE_LINES`.
 
 Nothing is written until every line is valid. If a line is wrong, the dialog opens again with the user's text still there and a list of what to fix.
 
