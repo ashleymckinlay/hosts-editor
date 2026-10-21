@@ -339,17 +339,17 @@ main() {
   fi
   [[ -x $DIALOG_BIN ]] || { log "swiftDialog not found at ${DIALOG_BIN}"; return 1; }
 
-  local user home
+  local user currentuser_home
   user="$(/usr/bin/stat -f %Su /dev/console)"
   if [[ -z $user || $user == root || $user == loginwindow ]]; then
     log "No user logged in; nothing to show"; return 1
   fi
   CONSOLE_USER=$user
-  home="$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null)"
-  home=${home#NFSHomeDirectory: }
-  [[ -d $home ]] || { log "Cannot find the home folder of ${user}"; return 1; }
-  : ${LOG_FILE:=$home/Library/Logs/HostsEditor/hosts-editor.log}
-  : ${BACKUP_DIR:=$home/Library/Application Support/HostsEditor/Backups}
+  currentuser_home="$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null)"
+  currentuser_home=${currentuser_home#NFSHomeDirectory: }
+  [[ -d $currentuser_home ]] || { log "Cannot find the home folder of ${user}"; return 1; }
+  : ${LOG_FILE:=$currentuser_home/Library/Logs/HostsEditor/hosts-editor.log}
+  : ${BACKUP_DIR:=$currentuser_home/Library/Application Support/HostsEditor/Backups}
 
   # Admin mistakes in the blocks must never reach /etc/hosts.
   local id
